@@ -1,72 +1,73 @@
-import codecs
 import glob
+import json
 import os
-import pylangacq
 import re
 
-SOURCE_DIR = os.path.join('..', 'data', 'wif_goteborg', 'transcripts')
+from tqdm import tqdm
+
+SPEAKER = "speaker"
+UTTERANCE = "utterance"
+ID = "id"
+NAME = "name"
+
+OUTPUT_DIR = os.path.join('..', 'data', 'wif_goteborg')
+OUTPUT_FILE = os.path.join(OUTPUT_DIR, 'wif_goteborg_dataset.json')
+SOURCE_DIR = os.path.join(OUTPUT_DIR, 'transcripts')
 chat_files = glob.glob(os.path.join(SOURCE_DIR, '**', '*.cha'), recursive=True)
 
 if not os.path.exists(SOURCE_DIR):
     raise FileNotFoundError(f"Directory {SOURCE_DIR} does not exist.")
 
-def clean_corpus(force=False) -> None:
-    """- Re-encode all .cha files to utf-8 (see _StackOverflow_ source: https://stackoverflow.com/a/191043)
-    - Fix capitalization of elements that prevent the parser from correctly recognizing participants and their roles
-    - Remove unnecessary tokens
-    - Fix typography
-    """
-    if not force:
-        print("Re-encoding corpus is disabled by default to prevent accidental data loss. Pass force=True to enable it.")
-        return
+def extract_dialogue_lines(file_path: str):
+    dialogue_lines = []
+    current_speaker = None
+    current_text = ""
     
-    for source_file_name in chat_files:
-        target_file_name=source_file_name.replace('.cha', '.txt')
-        with codecs.open(source_file_name, "r", "cp1252") as source_file:
-            with codecs.open(target_file_name, "w", "utf-8") as target_file:
-                while True:
-                    contents = source_file.read()
-                    if not contents:
-                        break
-                    contents = contents.replace('@participants:', '@Participants:') # Fix capitalization of @Participants line, that prevents the parser from recognizing participants
-                    contents = contents.replace('investigator', 'Investigator') # Fix capitalization of roles
-                    contents = contents.replace('subject', 'Subject')
-                    contents = contents.replace('Investigator/Partner', 'Investigator')
-                    contents = re.sub(r'\[[^\]]*?\]', '', contents) # Remove between brackets
-                    lines = contents.splitlines()
-                    for line in lines:
-                        words = []
-                        if line.startswith(('*', '%')):
-                            words = line.split()
-                            words = [word for word in words if not word.startswith(('@', '%', '+', '[', ']', '#'))] # Remove metadata tokens
-                        line = ' '.join(words)
-                    contents = '\n'.join(lines)
-                    # Fix typography quirks
-                    contents = contents.replace('<', '')
-                    contents = contents.replace('>', '')
-                    contents = contents.replace('(', '')
-                    contents = contents.replace(')', '')
-                    contents = contents.replace('#', '')
-                    contents = re.sub(r'\b\w+@\w+\b', '', contents) # Remove noisy tokens containing @
-                    contents = re.sub(r'[^\S\r\n]{2,}', ' ', contents).strip() # Remove extra whitespace, except for newlines
-                    contents = contents.replace("' ", "'")
-                    contents = contents.replace(' .', '.')
-                    contents = contents.replace('+', '-')
-                    contents = '\n'.join([line for line in contents.splitlines() if not line or any(char.islower() for char in line)]) # Remove lines that don't contain any lowercase letters, as they are most likely not meaningful, but keep empty lines that structure the file
-                    target_file.write(contents)
-                    os.remove(source_file_name) # Remove the original .cha file after re-encoding
-                    os.rename(target_file_name, source_file_name) # Rename the .txt file back to .cha
+    roles = {}
+    
+    speaker_regex = re.compile(r'^\*([A-Z0-9]{3}):\s*(.*)')
+    participants_regex = re.compile(r'([A-Z0-9]{3})\s+([A-Za-z]+)')
+    
+    with open(file_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            line = line.strip()
+            
+            if line.startswith('@Participants:'):
+                participants_data = line.replace('@Participants:', '').strip()
+                matches = participants_regex.findall(participants_data)
+                for code, role in matches:
+                    roles[code] = role
+            
+            if not line or line.startswith('@') or line.startswith('%'): # Skip other metadata lines
+                continue
 
-    print("Succesfully cleaned corpus.")
+            match = speaker_regex.match(line)
+            
+            if match:
+                if current_speaker and current_text:
+                    resolved_speaker = roles.get(current_speaker, current_speaker)
+                    dialogue_lines.append({SPEAKER: {ID: current_speaker, NAME: resolved_speaker}, UTTERANCE: current_text.strip()})
+
+                current_speaker = match.group(1)
+                current_text = match.group(2)
+
+            elif current_speaker and current_text: # Continuation of the current speaker's utterance on a new line
+                current_text += " " + line
+
+    if current_speaker and current_text: # Append the last speaker's text if it exists
+        resolved_speaker = roles.get(current_speaker, current_speaker)
+        dialogue_lines.append({SPEAKER: {ID: current_speaker, NAME: resolved_speaker}, UTTERANCE: current_text.strip()})
+
+    return dialogue_lines
+
+def save_dataset():
+    with open(OUTPUT_FILE, 'w', encoding='utf-8') as f_out:
+        files = []
+        for chat_file in tqdm(chat_files):
+            lines = extract_dialogue_lines(chat_file)
+            files.append({chat_file: lines})
+        json.dump(files, f_out, ensure_ascii=False, indent=2)
+    print(f"Successfully saved {len(chat_files)} files in {OUTPUT_FILE}.")
 
 if __name__ == "__main__":
-    clean_corpus()
-    
-    dataset = pylangacq.read_chat(SOURCE_DIR, strict=False)
-
-    for i in range(1):
-        file = dataset.pop_left()
-        path = file.file_paths[0]
-        participants = file.participants()
-        with open(path, 'r', encoding='utf-8') as f:
-            print(f"File: {path}, Participants: {participants}\n{f.read()}")
+    save_dataset()
