@@ -4,7 +4,7 @@ import os
 import pylangacq
 import re
 
-SOURCE_DIR = os.path.join('..', 'data', 'wif_goteborg', 'transcripts')
+SOURCE_DIR = os.path.join('..', 'data', 'spoken', 'transcripts')
 chat_files = glob.glob(os.path.join(SOURCE_DIR, '**', '*.cha'), recursive=True)
 
 if not os.path.exists(SOURCE_DIR):
