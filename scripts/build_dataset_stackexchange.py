@@ -27,7 +27,7 @@ def parse_html(html_content: str) -> str:
     return text
 
 def build_dataset() -> None:
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f_out:
+    with open(OUTPUT_FILE, "w", encoding="utf-8", newline='\n') as f_out:
         n_lines  = 0
         for _event, elem in tqdm(ET.iterparse(INPUT_FILE, events=("end",)), desc="Processing posts"):
             if elem.tag == "row":
@@ -50,7 +50,7 @@ def build_dataset() -> None:
                         "score": score,
                         "tags": tags,
                     }
-                    f_out.write(json.dumps(data, ensure_ascii=False, indent=2) + "\n")
+                    f_out.write(json.dumps(data, indent=0, ensure_ascii=False))
                     n_lines += 1
 
                 elem.clear() # Manage memory
