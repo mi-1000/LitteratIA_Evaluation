@@ -222,3 +222,5 @@ __marimo__/
 # Custom
 data/*
 *.csv
+scripts/.env
+scripts/__pycache__/

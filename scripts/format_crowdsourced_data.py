@@ -15,7 +15,7 @@ LABELS_COLUMNS = [
     "understandable"
 ]
 
-SAVED_COLUMNS = [ # We're not keeping every column from the database dump; some data is redundant and some is irrelevant for our
+SAVED_COLUMNS = [ # We're not keeping every column from the database dump; some data is redundant and some is irrelevant for our purposes
     "id",
     "timestamp",
     "model_a_name",
@@ -38,13 +38,19 @@ SAVED_COLUMNS = [ # We're not keeping every column from the database dump; some 
     "interface_lang"
 ] + LABELS_COLUMNS
 
-
 def format_csv_to_json(file_path: str) -> None:
     if not os.path.exists(file_path):
         raise FileNotFoundError(f"File not found at: {file_path}")
 
     df = pd.read_csv(file_path)
     df = df[SAVED_COLUMNS]
+    
+    # french_mask = df["question_content"].astype(str).apply(is_french)
+    # french_mask = french_mask.fillna(False)
+    
+    # print(f"Dropping {len(df[~french_mask])} non-French rows.")
+    # df = df[french_mask] # Only keep rows where the question content is in French
+        
     df = df.replace({np.nan: None}) # Replace NaN values with None for JSON compatibility
 
     # Rename columns for clarity

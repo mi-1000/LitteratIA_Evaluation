@@ -6,6 +6,8 @@ import regex
 from bs4 import BeautifulSoup
 from tqdm import tqdm
 
+from utils import is_french
+
 INPUT_FILE = os.path.join("..", "data", "StackExchange", "Posts.xml")
 OUTPUT_FILE = os.path.join("..", "data", "StackExchange", "french_dataset.jsonl")
 
@@ -26,15 +28,17 @@ def parse_html(html_content: str) -> str:
     
     return text
 
-def build_dataset() -> None:
+def build_dataset() -> None:    
     with open(OUTPUT_FILE, "w", encoding="utf-8", newline='\n') as f_out:
-        n_lines  = 0
+        n_lines = 0
+        filtered = 0
         for _event, elem in tqdm(ET.iterparse(INPUT_FILE, events=("end",)), desc="Processing posts"):
             if elem.tag == "row":
                 post_type = elem.get("PostTypeId")
                 score = int(elem.get("Score", 0))
 
                 if (post_type == "1" and score >= 2): # Questions (PostTypeId="1") with score >= 2 to ensure minimal relevance
+                
                     question_id = elem.get("Id")
                     title = elem.get("Title")
                     body = elem.get("Body")
@@ -42,6 +46,10 @@ def build_dataset() -> None:
 
                     title = parse_html(title)
                     body = parse_html(body)
+                    
+                    if not is_french(title) or not is_french(body):
+                        filtered += 1
+                        continue # Skip non-French questions
 
                     data = {
                         "id": question_id,
@@ -55,7 +63,7 @@ def build_dataset() -> None:
 
                 elem.clear() # Manage memory
 
-    print(f"Succesfully saved {n_lines} lines in {OUTPUT_FILE}.")
+    print(f"Succesfully saved {n_lines} lines in {OUTPUT_FILE}. Filtered out {filtered} non-French questions.")
 
 if __name__ == "__main__":
     build_dataset()
