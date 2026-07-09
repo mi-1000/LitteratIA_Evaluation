@@ -360,7 +360,7 @@ def write_record(record: dict[str, Any], output_path: str = OUTPUT_PATH) -> None
         with open(output_path, 'a+', encoding='utf-8') as out_f:
             out_f.write(json.dumps(record, ensure_ascii=False) + '\n')
 
-def run_prompt_generation_spoken(n: int | None = None, start_item: int = 0, sample: int = 1000) -> None:
+def run_prompt_generation_spoken(n: int | None = None, start_item: int = 0, sample: int = 1000, seed: int = SEED) -> None:
     """
     Run prompt generation for the spoken dataset.
     
@@ -368,6 +368,7 @@ def run_prompt_generation_spoken(n: int | None = None, start_item: int = 0, samp
         n (int | None): Number of items to process. If it exceeds the number of items in the dataset, it will be capped. If None, all sampled items will be processed.
         start_item (int): Index of the first item to process in the original dataset.
         sample (int): Number of items from the input dataset to randomly sample from.
+        seed (int): Seed for reproducibility.
     """
     if not os.path.exists(SPOKEN_DATASET_PATH):
         raise FileNotFoundError(f"Dataset not found at: {SPOKEN_DATASET_PATH}")
@@ -380,7 +381,7 @@ def run_prompt_generation_spoken(n: int | None = None, start_item: int = 0, samp
     
     items = corpus_data[start_item:start_item + (n if n is not None else len(corpus_data))]
     
-    model_a_assignments, model_b_assignments = get_balanced_model_pairs(len(items)) # Not using 'n' here to avoid an IndexError
+    model_a_assignments, model_b_assignments = get_balanced_model_pairs(len(items), seed=seed) # Not using 'n' here to avoid an IndexError
     
     tasks = []
     
@@ -406,7 +407,7 @@ def run_prompt_generation_spoken(n: int | None = None, start_item: int = 0, samp
         
     print("Generation completed.")
 
-def run_prompt_generation_stackexchange(n: int = 1, start_item: int = 0, sample: int = 1000) -> None:
+def run_prompt_generation_stackexchange(n: int = 1, start_item: int = 0, sample: int = 1000, seed: int = SEED) -> None:
     """
     Run prompt generation for the StackExchange dataset.
     
@@ -414,6 +415,7 @@ def run_prompt_generation_stackexchange(n: int = 1, start_item: int = 0, sample:
         n (int | None): Number of items to process. If it exceeds the number of items in the dataset, it will be capped. If None, all sampled items will be processed.
         start_item (int): Index of the first item to process in the original dataset.
         sample (int): Number of items from the input dataset to randomly sample from.
+        seed (int): Seed for reproducibility.
     """
     if not os.path.exists(STACKEXCHANGE_DATASET_PATH):
         raise FileNotFoundError(f"Dataset not found at: {STACKEXCHANGE_DATASET_PATH}")
@@ -431,7 +433,7 @@ def run_prompt_generation_stackexchange(n: int = 1, start_item: int = 0, sample:
     
     items = corpus_data[start_item:start_item + (n if n is not None else len(corpus_data))]
     
-    model_a_assignments, model_b_assignments = get_balanced_model_pairs(len(items))
+    model_a_assignments, model_b_assignments = get_balanced_model_pairs(len(items), seed=seed)
     
     tasks = []
     
@@ -455,7 +457,7 @@ def run_prompt_generation_stackexchange(n: int = 1, start_item: int = 0, sample:
 
     print("Generation completed.")
 
-def run_prompt_generation_wif(n: int | None = None, start_item: int = 0, sample: int = 1000) -> None:
+def run_prompt_generation_wif(n: int | None = None, start_item: int = 0, sample: int = 1000, seed: int = SEED) -> None:
     """
     Run prompt generation for the WIF dataset.
     
@@ -463,6 +465,7 @@ def run_prompt_generation_wif(n: int | None = None, start_item: int = 0, sample:
         n (int | None): Number of items to process. If it exceeds the number of items in the dataset, it will be capped. If None, all sampled items will be processed.
         start_item (int): Index of the first item to process in the original dataset.
         sample (int): Number of items from the input dataset to randomly sample from.
+        seed (int): Seed for reproducibility.
     """
     if not os.path.exists(WIF_DATASET_PATH):
         raise FileNotFoundError(f"Dataset not found at: {WIF_DATASET_PATH}")
@@ -476,7 +479,7 @@ def run_prompt_generation_wif(n: int | None = None, start_item: int = 0, sample:
 
     items = corpus_data[start_item:start_item + (n if n is not None else len(corpus_data))]
 
-    model_a_assignments, model_b_assignments = get_balanced_model_pairs(len(items))
+    model_a_assignments, model_b_assignments = get_balanced_model_pairs(len(items), seed=seed)
 
     tasks = []
     
@@ -523,9 +526,9 @@ def run_prompt_generation(n: int | Tuple[int, int, int] | None = None, start_ite
     else:
         start_item_spoken = start_item_stackexchange = start_item_wif = start_item
     
-    run_prompt_generation_spoken(n_spoken, start_item_spoken, sample = 500)
-    run_prompt_generation_stackexchange(n_stackexchange, start_item_stackexchange, sample = 1000)
-    run_prompt_generation_wif(n_wif, start_item_wif, sample = 104)
+    run_prompt_generation_spoken(n_spoken, start_item_spoken, sample = 500, seed = SEED)
+    run_prompt_generation_stackexchange(n_stackexchange, start_item_stackexchange, sample = 1000, seed = SEED + 1)
+    run_prompt_generation_wif(n_wif, start_item_wif, sample = 104, seed = SEED + 2)
 
 def check_balanced_dataset() -> None:
     """
@@ -576,5 +579,5 @@ def check_marginals_and_cooccurrence(computed_pairs: tuple[list[str], list[str]]
     print(f"Standard deviation of pair counts: {(sum((c - sum(cooccurrence.values())/len(cooccurrence))**2 for c in cooccurrence.values()) / len(cooccurrence)) ** 0.5:.2f}")
 
 if __name__ == "__main__":
-    run_prompt_generation()
+    # run_prompt_generation()
     check_balanced_dataset()
