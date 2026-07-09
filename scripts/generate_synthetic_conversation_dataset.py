@@ -9,6 +9,7 @@ from enum import Enum
 from typing import Any, Tuple
 from openai import APIConnectionError, AuthenticationError, OpenAI, PermissionDeniedError, RateLimitError
 from dotenv import load_dotenv
+import pandas as pd
 from tqdm import tqdm
 
 from system_prompt import PromptType, PersonaType, ToneType, get_system_prompt
@@ -22,30 +23,25 @@ WRITE_LOCK = threading.Lock()
 MAX_WORKERS = 15 # Number of threads for concurrent API calls
 
 MODEL_LIST = [
-    "tencent/hy3:free",
-    "qwen/qwen3-coder:free",
-    "openai/gpt-oss-120b:free",
-    "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
-    "poolside/laguna-xs.2:free"
-    # "google/gemini-3-flash-preview",
-    # "google/gemini-3.1-flash-lite-preview",
-    # "openai/gpt-5.4",
-    # "openai/gpt-5.4-mini",
-    # "deepseek/deepseek-v4-pro",
-    # "deepseek/deepseek-v4-flash",
-    # "mistralai/mistral-large-2512",
-    # "mistralai/mistral-medium-3"
+    "google/gemini-3-flash-preview",
+    "google/gemini-3.1-flash-lite-preview",
+    "openai/gpt-5.4",
+    "openai/gpt-5.4-mini",
+    "deepseek/deepseek-v4-pro",
+    "deepseek/deepseek-v4-flash",
+    "mistralai/mistral-large-2512",
+    "mistralai/mistral-medium-3"
 ]
 
 WEIGHTS = [
     1.0,  # google/gemini-3-flash-preview
     1.0,  # google/gemini-3.1-flash-lite-preview
-    # 0.5,  # openai/gpt-5.4 (expensive 🥲)
+    0.5,  # openai/gpt-5.4 (expensive 🥲)
     1.0,  # openai/gpt-5.4-mini
     1.0,  # deepseek/deepseek-v4-pro
     1.0,  # deepseek/deepseek-v4-flash
     1.0,  # mistralai/mistral-large-2512
-    # 1.0   # mistralai/mistral-medium-3
+    1.0   # mistralai/mistral-medium-3
 ]
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -312,7 +308,7 @@ def get_balanced_model_pairs(n_processed_items: int, seed: int = SEED, model_lis
     model_b_list = [pair[1] for pair in final_pairs]
     return model_a_list, model_b_list
 
-def process_single_response(item_id: str, category: str, config_name: str, prompt_type: PromptType, user_prompt: str, model_name: str, seed: int = SEED, **kwargs) -> dict[str, str]:
+def process_single_response(item_id: str, category: str, config_name: str, prompt_type: PromptType, user_prompt: str, model_names: Tuple[str, str], seed: int = SEED, **kwargs) -> dict[str, str]:
     """
     Process a given prompt configuration.
     
@@ -322,7 +318,7 @@ def process_single_response(item_id: str, category: str, config_name: str, promp
         config_name (str): Name of the prompt configuration.
         prompt_type (PromptType): The type of prompt configuration to use.
         user_prompt (str): The user prompt to which the LLM should respond.
-        model_name (str): The identifier of the LLM model to use.
+        model_names (Tuple[str, str]): A tuple containing the names of the two models to use.
         seed (int): Seed for reproducibility.
         **kwargs: Additional keyword arguments for dataset-specific fields.
     
@@ -330,19 +326,28 @@ def process_single_response(item_id: str, category: str, config_name: str, promp
         dict[str, str]: A dictionary containing the processed record with all relevant fields.
     """
     system_prompt = get_system_prompt(prompt_type, seed=seed)
-    llm_response = get_llm_response(system_prompt, user_prompt, model_name=model_name, seed=seed)
-    llm_output = llm_response.get("content", "")
+    
+    model_a_response = get_llm_response(system_prompt, user_prompt, model_name=model_names[0], seed=seed)
+    model_b_response = get_llm_response(system_prompt, user_prompt, model_name=model_names[1], seed=seed)
     
     out = {
         "item_id": item_id,
         "category": category,
         "prompt_configuration": config_name,
-        "model_name": model_name,
         "system_prompt": system_prompt,
         "user_prompt": user_prompt,
-        "llm_response": llm_output,
-        "llm_usage": llm_response.get("usage", None),
-        "finish_reason": llm_response.get("finish_reason", None)
+        "model_a": {
+            "model_name": model_names[0],
+            "llm_response": model_a_response.get("content", None),
+            "llm_usage": model_a_response.get("usage", None),
+            "finish_reason": model_a_response.get("finish_reason", None)
+        },
+        "model_b": {
+            "model_name": model_names[1],
+            "llm_response": model_b_response.get("content", None),
+            "llm_usage": model_b_response.get("usage", None),
+            "finish_reason": model_b_response.get("finish_reason", None)
+        },
     }
     
     out.update({k: v for k, v in kwargs.items() if k not in out}) # Add any additional, dataset-specific fields
@@ -355,12 +360,12 @@ def write_record(record: dict[str, Any], output_path: str = OUTPUT_PATH) -> None
         with open(output_path, 'a+', encoding='utf-8') as out_f:
             out_f.write(json.dumps(record, ensure_ascii=False) + '\n')
 
-def run_prompt_generation_spoken(n: int = 1, start_item: int = 0, sample: int = 1000) -> None:
+def run_prompt_generation_spoken(n: int | None = None, start_item: int = 0, sample: int = 1000) -> None:
     """
     Run prompt generation for the spoken dataset.
     
     Args:
-        n (int): Number of items to process. If it exceeds the number of items in the dataset, it will be capped.
+        n (int | None): Number of items to process. If it exceeds the number of items in the dataset, it will be capped. If None, all sampled items will be processed.
         start_item (int): Index of the first item to process in the original dataset.
         sample (int): Number of items from the input dataset to randomly sample from.
     """
@@ -373,7 +378,7 @@ def run_prompt_generation_spoken(n: int = 1, start_item: int = 0, sample: int = 
     
     corpus_data = random.sample(corpus_data, min(sample, len(corpus_data)))
     
-    items = corpus_data[start_item:start_item + n]
+    items = corpus_data[start_item:start_item + (n if n is not None else len(corpus_data))]
     
     model_a_assignments, model_b_assignments = get_balanced_model_pairs(len(items)) # Not using 'n' here to avoid an IndexError
     
@@ -390,8 +395,7 @@ def run_prompt_generation_spoken(n: int = 1, start_item: int = 0, sample: int = 
         model_a, model_b = model_a_assignments[i], model_b_assignments[i]
         
         for config_name, prompt_type in PROMPT_CONFIGURATIONS.items():
-            tasks.append((f"spoken_{file_id}", "f", config_name, prompt_type, user_prompt, model_a, {"source_file": file_path, "source_dataset": DatasetType.SPOKEN.value}))
-            tasks.append((f"spoken_{file_id}", "f", config_name, prompt_type, user_prompt, model_b, {"source_file": file_path, "source_dataset": DatasetType.SPOKEN.value}))
+            tasks.append((f"spoken_{file_id}", "f", config_name, prompt_type, user_prompt, (model_a, model_b), {"source_file": file_path, "source_dataset": DatasetType.SPOKEN.value}))
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = [executor.submit(process_single_response, *task[:-1], **task[-1]) for task in tasks]
@@ -407,7 +411,7 @@ def run_prompt_generation_stackexchange(n: int = 1, start_item: int = 0, sample:
     Run prompt generation for the StackExchange dataset.
     
     Args:
-        n (int): Number of items to process. If it exceeds the number of items in the dataset, it will be capped.
+        n (int | None): Number of items to process. If it exceeds the number of items in the dataset, it will be capped. If None, all sampled items will be processed.
         start_item (int): Index of the first item to process in the original dataset.
         sample (int): Number of items from the input dataset to randomly sample from.
     """
@@ -425,11 +429,13 @@ def run_prompt_generation_stackexchange(n: int = 1, start_item: int = 0, sample:
             data = json.loads(line)
             corpus_data.append(data)
     
-    model_a_assignments, model_b_assignments = get_balanced_model_pairs(len(corpus_data[start_item:start_item + n]))
+    items = corpus_data[start_item:start_item + (n if n is not None else len(corpus_data))]
+    
+    model_a_assignments, model_b_assignments = get_balanced_model_pairs(len(items))
     
     tasks = []
     
-    for i, item in enumerate(corpus_data[start_item:start_item + n]):
+    for i, item in enumerate(items):
         question_id = int(item.get("id", "0"))
         tags = item.get("tags", [])
         
@@ -438,8 +444,7 @@ def run_prompt_generation_stackexchange(n: int = 1, start_item: int = 0, sample:
         model_a, model_b = model_a_assignments[i], model_b_assignments[i]
         
         for config_name, prompt_type in PROMPT_CONFIGURATIONS.items():
-            tasks.append((f"fse_{question_id}", "c", config_name, prompt_type, user_prompt, model_a, {"tags": tags, "source_dataset": DatasetType.STACKEXCHANGE.value}))
-            tasks.append((f"fse_{question_id}", "c", config_name, prompt_type, user_prompt, model_b, {"tags": tags, "source_dataset": DatasetType.STACKEXCHANGE.value}))
+            tasks.append((f"fse_{question_id}", "c", config_name, prompt_type, user_prompt, (model_a, model_b), {"tags": tags, "source_dataset": DatasetType.STACKEXCHANGE.value}))
     
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = [executor.submit(process_single_response, *task[:-1], **task[-1]) for task in tasks]
@@ -450,12 +455,12 @@ def run_prompt_generation_stackexchange(n: int = 1, start_item: int = 0, sample:
 
     print("Generation completed.")
 
-def run_prompt_generation_wif(n: int = 1, start_item: int = 0, sample: int = 1000) -> None:
+def run_prompt_generation_wif(n: int | None = None, start_item: int = 0, sample: int = 1000) -> None:
     """
     Run prompt generation for the WIF dataset.
     
     Args:
-        n (int): Number of items to process. If it exceeds the number of items in the dataset, it will be capped.
+        n (int | None): Number of items to process. If it exceeds the number of items in the dataset, it will be capped. If None, all sampled items will be processed.
         start_item (int): Index of the first item to process in the original dataset.
         sample (int): Number of items from the input dataset to randomly sample from.
     """
@@ -469,11 +474,13 @@ def run_prompt_generation_wif(n: int = 1, start_item: int = 0, sample: int = 100
     
     corpus_data = random.sample(corpus_data, min(sample, len(corpus_data)))
 
-    model_a_assignments, model_b_assignments = get_balanced_model_pairs(len(corpus_data[start_item:start_item + n]))
+    items = corpus_data[start_item:start_item + (n if n is not None else len(corpus_data))]
+
+    model_a_assignments, model_b_assignments = get_balanced_model_pairs(len(items))
 
     tasks = []
     
-    for i, item in enumerate(corpus_data[start_item:start_item + n]):
+    for i, item in enumerate(items):
         # Extracts key and value since root objects are formatted as {"path/to/file.txt": [...]}
         file_path = list(item.keys())[0]
         file_id = os.path.basename(file_path).replace('.txt', '')
@@ -487,8 +494,7 @@ def run_prompt_generation_wif(n: int = 1, start_item: int = 0, sample: int = 100
         model_a, model_b = model_a_assignments[i], model_b_assignments[i]
         
         for config_name, prompt_type in PROMPT_CONFIGURATIONS.items():
-            tasks.append((f"wif_{file_id}", "f", config_name, prompt_type, user_prompt, model_a, {"source_file": file_path, "source_dataset": DatasetType.WIF.value}))
-            tasks.append((f"wif_{file_id}", "f", config_name, prompt_type, user_prompt, model_b, {"source_file": file_path, "source_dataset": DatasetType.WIF.value}))
+            tasks.append((f"wif_{file_id}", "f", config_name, prompt_type, user_prompt, (model_a, model_b), {"source_file": file_path, "source_dataset": DatasetType.WIF.value}))
             
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = [executor.submit(process_single_response, *task[:-1], **task[-1]) for task in tasks]
@@ -499,12 +505,12 @@ def run_prompt_generation_wif(n: int = 1, start_item: int = 0, sample: int = 100
         
     print("Generation completed.")
 
-def run_prompt_generation(n: int | Tuple[int, int, int] = 1, start_item: int | Tuple[int, int, int] = 0) -> None:
+def run_prompt_generation(n: int | Tuple[int, int, int] | None = None, start_item: int | Tuple[int, int, int] = 0) -> None:
     """
     Launch the prompt generation process for all datasets.
     
     Args:
-        n (int | Tuple[int, int, int]): Number of items to process for each dataset. If a single integer is provided, it will be used for all datasets. If a tuple of three integers is provided, they will be used for the spoken, StackExchange, and WIF datasets respectively.
+        n (int | Tuple[int, int, int] | None): Number of items to process for each dataset. If a single integer is provided, it will be used for all datasets. If a tuple of three integers is provided, they will be used for the spoken, StackExchange, and WIF datasets respectively. If None, all items will be processed.
         start_item (int | Tuple[int, int, int]): Index of the first item to process in the original dataset for each dataset. If a single integer is provided, it will be used for all datasets. If a tuple of three integers is provided, they will be used for the spoken, StackExchange, and WIF datasets respectively.
     """
     
@@ -523,8 +529,7 @@ def run_prompt_generation(n: int | Tuple[int, int, int] = 1, start_item: int | T
 
 def check_balanced_dataset() -> None:
     """
-    Returns:
-        A dictionary with the counts of each model output in the generated dataset.
+    Print the counts of each model output in the generated dataset, the total number of records, and the co-occurrence matrix of model pairs.
     """
     
     from collections import Counter
@@ -533,8 +538,28 @@ def check_balanced_dataset() -> None:
     with open(OUTPUT_PATH, 'r', encoding='utf-8') as f:
         for line in f.readlines():
             record = json.loads(line)
-            counts[record["model_name"]] += 1
-    print(counts)
+            counts[record["model_a"]["model_name"]] += 1
+            counts[record["model_b"]["model_name"]] += 1
+    print(f"Counts per model: {counts}")
+    
+    matrix = {m1: {m2: 0 for m2 in MODEL_LIST} for m1 in MODEL_LIST}
+    total_records = 0
+    
+    with open(OUTPUT_PATH, 'r', encoding='utf-8') as f:
+        for line in f.readlines():
+            record = json.loads(line)
+            m1 = record["model_a"]["model_name"]
+            m2 = record["model_b"]["model_name"]
+            
+            if m1 in matrix and m2 in matrix[m1]:
+                matrix[m1][m2] += 1
+                total_records += 1
+    
+    df = pd.DataFrame.from_dict(matrix, orient='index')
+    
+    print("Total number of records:", total_records)
+    print("Co-occurrence matrix:")
+    print(df)
 
 def check_marginals_and_cooccurrence(computed_pairs: tuple[list[str], list[str]], model_list: list[str] = MODEL_LIST) -> None:
     """Checks the marginal frequencies and co-occurrence counts of model pairs in the generated dataset."""
@@ -552,3 +577,4 @@ def check_marginals_and_cooccurrence(computed_pairs: tuple[list[str], list[str]]
 
 if __name__ == "__main__":
     run_prompt_generation()
+    check_balanced_dataset()
