@@ -192,7 +192,122 @@ def get_balanced_model_assignments(n_processed_items: int, seed: int = SEED, mod
     rng.shuffle(out)
     return out
 
-def process_single_config(item_id: str, category: str, config_name: str, prompt_type: PromptType, user_prompt: str, model_name: str, seed: int = SEED, **kwargs) -> dict[str, str]:
+def _ipf_balance_pair_matrix(
+    weights: list[float],
+    n_processed_items: int,
+    tol: float = 1e-9,
+    max_iter: int = 1000
+) -> list[list[float]]:
+    """
+    Rescales the pairwise weight matrix (product of individual weights, zero diagonal) via [Iterative Proportional Fitting](https://en.wikipedia.org/wiki/Iterative_proportional_fitting) so that both row sums and column sums converge to the target marginal frequency per model (proportional to `weights`), rather than the quadratic `w_i` * (`W_total` - `w_i`) approximation of the raw product matrix.
+
+    Returns:
+        A matrix of rescaled pair weights.
+    """
+    # If all weights are equal, we directly return the product matrix (with zero diagonal)
+    if all(w == weights[0] for w in weights):
+        k = len(weights)
+        return [[weights[i] * weights[j] if i != j else 0.0 for j in range(k)] for i in range(k)]
+    
+    k = len(weights)
+    total_weight = sum(weights)
+    
+    # Target: number of times model i should appear in position A (and B likewise)
+    target = [w / total_weight * n_processed_items for w in weights]
+
+    # Initial matrix: product of weights, null diagonal (no self-pairing)
+    M = [[weights[i] * weights[j] if i != j else 0.0 for j in range(k)] for i in range(k)]
+
+    for _ in range(max_iter):
+        # Rescaling of rows (position A)
+        row_sums = [sum(row) for row in M]
+        for i in range(k):
+            if row_sums[i] > 0:
+                factor = target[i] / row_sums[i]
+                M[i] = [x * factor for x in M[i]]
+
+        # Rescaling of columns (position B)
+        col_sums = [sum(M[i][j] for i in range(k)) for j in range(k)]
+        for j in range(k):
+            if col_sums[j] > 0:
+                factor = target[j] / col_sums[j]
+                for i in range(k):
+                    M[i][j] *= factor
+
+        # Convergence: row sums should be close to target
+        row_sums_check = [sum(row) for row in M]
+        max_diff = max(abs(row_sums_check[i] - target[i]) for i in range(k))
+        if max_diff < tol:
+            break
+
+    return M
+
+def get_balanced_model_pairs(n_processed_items: int, seed: int = SEED, model_list: list[str] = MODEL_LIST, weights: list[float] | None = WEIGHTS) -> Tuple[list[str], list[str]]:
+    """
+    Get a 2-tuple of lists of model names assigned in a balanced way, in order to perform (uniform or weighted) stratified random sampling.
+    If weights are provided, they will be used to determine the weight of each model in the output list (_i.e._ one can determine some to appear more or less frequently).
+    
+    Unlike regular random sampling, this method allows to reduce most of the variance in the number of occurences per model and co-occurrences between models across the dataset.
+    
+    Args:
+        n_processed_items (int): Total number of items to process.
+        seed (int): Seed for reproducibility.
+        model_list (list[str]): List of model names to assign.
+        weights (list[float] | None): Optional list of weights corresponding to each model in model_list. If None, all models will be assigned equally.
+        
+    Returns:
+        Tuple[list[str], list[str]]: A 2-tuple of lists of model names assigned in a balanced way.
+        
+    Raises:
+        ValueError: If the length of `weights` does not match the length of `model_list` (lists should map one-to-one).
+    """
+    rng = random.Random(seed)
+    
+    if weights is None:
+        weights = [1.0] * len(model_list)
+    
+    # Calculate weights for all possible pairs of models
+    M = _ipf_balance_pair_matrix(weights, n_processed_items)
+    
+    all_possible_pairs = []
+    pair_weights = []
+    
+    for i, m1 in enumerate(model_list):
+        for j, m2 in enumerate(model_list):
+            if i != j: # No match against oneself
+                all_possible_pairs.append((m1, m2))
+                pair_weights.append(M[i][j]) # The pair's weight is the rescaled weight from the IPF matrix
+    
+    # Counting how much times each model pair appears based on the weights
+    total_pair_weight = sum(pair_weights)
+    proportions = [w / total_pair_weight for w in pair_weights]
+    counts = [int(p * n_processed_items) for p in proportions] # Round down figures and leave out the remainders for now
+    
+    # Distributing the remaining remainders among models using the largest remainder method
+    # See https://en.wikipedia.org/wiki/Quota_method
+    remainder = n_processed_items - sum(counts)
+    if remainder > 0:
+        # Calculate the fractional parts of the proportions for each model
+        remainders = [(p * n_processed_items) - int(p * n_processed_items) for p in proportions]
+        # Sort models by their fractional parts in descending order
+        indices = list(range(len(remainders)))
+        rng.shuffle(indices) # Shuffle indices to break ties randomly
+        pair_indices = sorted(indices, key=lambda i: remainders[i], reverse=True)
+        # Assign the remaining items to the models with the largest fractional parts
+        for i in range(remainder):
+            counts[pair_indices[i]] += 1
+    
+    final_pairs = []
+    for pair, count in zip(all_possible_pairs, counts):
+        final_pairs.extend([pair] * count)
+    
+    rng.shuffle(final_pairs)
+    
+    model_a_list = [pair[0] for pair in final_pairs]
+    model_b_list = [pair[1] for pair in final_pairs]
+    return model_a_list, model_b_list
+
+def process_single_response(item_id: str, category: str, config_name: str, prompt_type: PromptType, user_prompt: str, model_name: str, seed: int = SEED, **kwargs) -> dict[str, str]:
     """
     Process a given prompt configuration.
     
@@ -240,7 +355,7 @@ def run_prompt_generation_spoken(n: int = 1, start_item: int = 0, sample: int = 
     Run prompt generation for the spoken dataset.
     
     Args:
-        n (int): Number of items to process.
+        n (int): Number of items to process. If it exceeds the number of items in the dataset, it will be capped.
         start_item (int): Index of the first item to process in the original dataset.
         sample (int): Number of items from the input dataset to randomly sample from.
     """
@@ -271,7 +386,7 @@ def run_prompt_generation_spoken(n: int = 1, start_item: int = 0, sample: int = 
             tasks.append((f"spoken_{file_id}", "f", config_name, prompt_type, user_prompt, model_name, {"source_file": file_path, "source_dataset": DatasetType.SPOKEN.value}))
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [executor.submit(process_single_config, *task[:-1], **task[-1]) for task in tasks]
+        futures = [executor.submit(process_single_response, *task[:-1], **task[-1]) for task in tasks]
         
         for future in tqdm(as_completed(futures), total=len(futures), desc="Generating prompts"):
             record = future.result()
@@ -284,7 +399,7 @@ def run_prompt_generation_stackexchange(n: int = 1, start_item: int = 0, sample:
     Run prompt generation for the StackExchange dataset.
     
     Args:
-        n (int): Number of items to process.
+        n (int): Number of items to process. If it exceeds the number of items in the dataset, it will be capped.
         start_item (int): Index of the first item to process in the original dataset.
         sample (int): Number of items from the input dataset to randomly sample from.
     """
@@ -318,7 +433,7 @@ def run_prompt_generation_stackexchange(n: int = 1, start_item: int = 0, sample:
             tasks.append((f"fse_{question_id}", "c", config_name, prompt_type, user_prompt, model_name, {"tags": tags, "source_dataset": DatasetType.STACKEXCHANGE.value}))
     
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [executor.submit(process_single_config, *task[:-1], **task[-1]) for task in tasks]
+        futures = [executor.submit(process_single_response, *task[:-1], **task[-1]) for task in tasks]
         
         for future in tqdm(as_completed(futures), total=len(futures), desc="Generating prompts"):
             record = future.result()
@@ -331,7 +446,7 @@ def run_prompt_generation_wif(n: int = 1, start_item: int = 0, sample: int = 100
     Run prompt generation for the WIF dataset.
     
     Args:
-        n (int): Number of items to process.
+        n (int): Number of items to process. If it exceeds the number of items in the dataset, it will be capped.
         start_item (int): Index of the first item to process in the original dataset.
         sample (int): Number of items from the input dataset to randomly sample from.
     """
@@ -366,7 +481,7 @@ def run_prompt_generation_wif(n: int = 1, start_item: int = 0, sample: int = 100
             tasks.append((f"wif_{file_id}", "f", config_name, prompt_type, user_prompt, model_name, {"source_file": file_path, "source_dataset": DatasetType.WIF.value}))
             
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [executor.submit(process_single_config, *task[:-1], **task[-1]) for task in tasks]
+        futures = [executor.submit(process_single_response, *task[:-1], **task[-1]) for task in tasks]
         
         for future in tqdm(as_completed(futures), total=len(futures), desc="Generating prompts"):
             record= future.result()
@@ -411,6 +526,19 @@ def check_balanced_dataset() -> None:
             counts[record["model_name"]] += 1
     print(counts)
 
+def check_marginals_and_cooccurrence(computed_pairs: tuple[list[str], list[str]], model_list: list[str] = MODEL_LIST) -> None:
+    from collections import Counter
+
+    pairs = list(zip(*computed_pairs))
+    marginal = Counter(m for pair in pairs for m in pair)
+    cooccurrence = Counter(pairs)
+    
+    print("Marginal frequency per model:")
+    for model, count in marginal.most_common():
+        print(f"  {model}: {count} ({count / sum(marginal.values()):.2%})")
+    print(f"Number of distinct pairs covered: {len(cooccurrence)} / {len(model_list) * (len(model_list) - 1)}")
+    print(f"Standard deviation of pair counts: {(sum((c - sum(cooccurrence.values())/len(cooccurrence))**2 for c in cooccurrence.values()) / len(cooccurrence)) ** 0.5:.2f}")
+
 if __name__ == "__main__":
-    run_prompt_generation(1, 0)
-    check_balanced_dataset()
+    # run_prompt_generation(1, 0)
+    # check_balanced_dataset()
