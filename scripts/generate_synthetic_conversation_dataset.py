@@ -22,25 +22,30 @@ WRITE_LOCK = threading.Lock()
 MAX_WORKERS = 15 # Number of threads for concurrent API calls
 
 MODEL_LIST = [
-    "google/gemini-3-flash-preview",
-    "google/gemini-3.1-flash-lite-preview",
-    "openai/gpt-5.4",
-    "openai/gpt-5.4-mini",
-    "deepseek/deepseek-v4-pro",
-    "deepseek/deepseek-v4-flash",
-    "mistralai/mistral-large-2512",
-    "mistralai/mistral-medium-3"
+    "tencent/hy3:free",
+    "qwen/qwen3-coder:free",
+    "openai/gpt-oss-120b:free",
+    "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+    "poolside/laguna-xs.2:free"
+    # "google/gemini-3-flash-preview",
+    # "google/gemini-3.1-flash-lite-preview",
+    # "openai/gpt-5.4",
+    # "openai/gpt-5.4-mini",
+    # "deepseek/deepseek-v4-pro",
+    # "deepseek/deepseek-v4-flash",
+    # "mistralai/mistral-large-2512",
+    # "mistralai/mistral-medium-3"
 ]
 
 WEIGHTS = [
     1.0,  # google/gemini-3-flash-preview
     1.0,  # google/gemini-3.1-flash-lite-preview
-    0.5,  # openai/gpt-5.4 (expensive 🥲)
+    # 0.5,  # openai/gpt-5.4 (expensive 🥲)
     1.0,  # openai/gpt-5.4-mini
     1.0,  # deepseek/deepseek-v4-pro
     1.0,  # deepseek/deepseek-v4-flash
     1.0,  # mistralai/mistral-large-2512
-    1.0   # mistralai/mistral-medium-3
+    # 1.0   # mistralai/mistral-medium-3
 ]
 
 API_KEY = os.getenv("OPENROUTER_API_KEY")
@@ -368,11 +373,13 @@ def run_prompt_generation_spoken(n: int = 1, start_item: int = 0, sample: int = 
     
     corpus_data = random.sample(corpus_data, min(sample, len(corpus_data)))
     
-    model_assignments = get_balanced_model_assignments(n)
+    items = corpus_data[start_item:start_item + n]
+    
+    model_a_assignments, model_b_assignments = get_balanced_model_pairs(len(items)) # Not using 'n' here to avoid an IndexError
     
     tasks = []
     
-    for i, item in enumerate(corpus_data[start_item:start_item + n]):
+    for i, item in enumerate(items):
         # Extracts key and value since root objects are formatted as {"path/to/file.cha": [...]}
         file_path = list(item.keys())[0]
         dialogue_turns = item[file_path]
@@ -380,10 +387,11 @@ def run_prompt_generation_spoken(n: int = 1, start_item: int = 0, sample: int = 
         
         user_prompt = format_dialogue_to_prompt(dialogue_turns)
         
-        model_name = model_assignments[i]
+        model_a, model_b = model_a_assignments[i], model_b_assignments[i]
         
         for config_name, prompt_type in PROMPT_CONFIGURATIONS.items():
-            tasks.append((f"spoken_{file_id}", "f", config_name, prompt_type, user_prompt, model_name, {"source_file": file_path, "source_dataset": DatasetType.SPOKEN.value}))
+            tasks.append((f"spoken_{file_id}", "f", config_name, prompt_type, user_prompt, model_a, {"source_file": file_path, "source_dataset": DatasetType.SPOKEN.value}))
+            tasks.append((f"spoken_{file_id}", "f", config_name, prompt_type, user_prompt, model_b, {"source_file": file_path, "source_dataset": DatasetType.SPOKEN.value}))
 
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = [executor.submit(process_single_response, *task[:-1], **task[-1]) for task in tasks]
@@ -417,7 +425,7 @@ def run_prompt_generation_stackexchange(n: int = 1, start_item: int = 0, sample:
             data = json.loads(line)
             corpus_data.append(data)
     
-    model_assignments = get_balanced_model_assignments(n)
+    model_a_assignments, model_b_assignments = get_balanced_model_pairs(len(corpus_data[start_item:start_item + n]))
     
     tasks = []
     
@@ -427,10 +435,11 @@ def run_prompt_generation_stackexchange(n: int = 1, start_item: int = 0, sample:
         
         user_prompt = format_question_to_prompt(item)
         
-        model_name = model_assignments[i]
+        model_a, model_b = model_a_assignments[i], model_b_assignments[i]
         
         for config_name, prompt_type in PROMPT_CONFIGURATIONS.items():
-            tasks.append((f"fse_{question_id}", "c", config_name, prompt_type, user_prompt, model_name, {"tags": tags, "source_dataset": DatasetType.STACKEXCHANGE.value}))
+            tasks.append((f"fse_{question_id}", "c", config_name, prompt_type, user_prompt, model_a, {"tags": tags, "source_dataset": DatasetType.STACKEXCHANGE.value}))
+            tasks.append((f"fse_{question_id}", "c", config_name, prompt_type, user_prompt, model_b, {"tags": tags, "source_dataset": DatasetType.STACKEXCHANGE.value}))
     
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = [executor.submit(process_single_response, *task[:-1], **task[-1]) for task in tasks]
@@ -460,7 +469,7 @@ def run_prompt_generation_wif(n: int = 1, start_item: int = 0, sample: int = 100
     
     corpus_data = random.sample(corpus_data, min(sample, len(corpus_data)))
 
-    model_assignments = get_balanced_model_assignments(n)
+    model_a_assignments, model_b_assignments = get_balanced_model_pairs(len(corpus_data[start_item:start_item + n]))
 
     tasks = []
     
@@ -475,10 +484,11 @@ def run_prompt_generation_wif(n: int = 1, start_item: int = 0, sample: int = 100
         
         user_prompt = format_written_production_to_prompt(text, grade)
         
-        model_name = model_assignments[i]
+        model_a, model_b = model_a_assignments[i], model_b_assignments[i]
         
         for config_name, prompt_type in PROMPT_CONFIGURATIONS.items():
-            tasks.append((f"wif_{file_id}", "f", config_name, prompt_type, user_prompt, model_name, {"source_file": file_path, "source_dataset": DatasetType.WIF.value}))
+            tasks.append((f"wif_{file_id}", "f", config_name, prompt_type, user_prompt, model_a, {"source_file": file_path, "source_dataset": DatasetType.WIF.value}))
+            tasks.append((f"wif_{file_id}", "f", config_name, prompt_type, user_prompt, model_b, {"source_file": file_path, "source_dataset": DatasetType.WIF.value}))
             
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
         futures = [executor.submit(process_single_response, *task[:-1], **task[-1]) for task in tasks]
@@ -527,6 +537,7 @@ def check_balanced_dataset() -> None:
     print(counts)
 
 def check_marginals_and_cooccurrence(computed_pairs: tuple[list[str], list[str]], model_list: list[str] = MODEL_LIST) -> None:
+    """Checks the marginal frequencies and co-occurrence counts of model pairs in the generated dataset."""
     from collections import Counter
 
     pairs = list(zip(*computed_pairs))
@@ -540,5 +551,4 @@ def check_marginals_and_cooccurrence(computed_pairs: tuple[list[str], list[str]]
     print(f"Standard deviation of pair counts: {(sum((c - sum(cooccurrence.values())/len(cooccurrence))**2 for c in cooccurrence.values()) / len(cooccurrence)) ** 0.5:.2f}")
 
 if __name__ == "__main__":
-    # run_prompt_generation(1, 0)
-    # check_balanced_dataset()
+    run_prompt_generation()
