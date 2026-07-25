@@ -7,6 +7,10 @@ import os
 SOURCE_FILE_PATH = os.path.join("..", "profs_phase1.csv")
 OUTPUT_FILE_PATH = os.path.join("..", "data", "profs_phase1.json")
 
+INPUT_STUDENT_PATH = os.path.join("..", "data", "reactions.json"),
+INPUT_TEACHER_PATH = os.path.join("..", "data", "profs_phase1.json"),
+OUTPUT_PATH = os.path.join("..", "data", "students_teacher_gold.json")
+
 LABELS_COLUMNS = [
     "complete",
     "correct",
@@ -125,7 +129,7 @@ def format_teacher_data_csv_to_json(input_path: str = SOURCE_FILE_PATH, output_p
 
     print("Data file successfully saved at ", output_path)
 
-def merge_student_and_teacher_data(input_student_path: str, input_teacher_path: str, output_path: str) -> None:
+def merge_student_and_teacher_data(input_student_path: str = INPUT_STUDENT_PATH, input_teacher_path: str = INPUT_TEACHER_PATH, output_path: str = OUTPUT_PATH) -> None:
     if not os.path.exists(input_student_path):
         raise FileNotFoundError(f"File not found at: {input_student_path}")
     if not os.path.exists(input_teacher_path):
@@ -157,8 +161,4 @@ def merge_student_and_teacher_data(input_student_path: str, input_teacher_path: 
 if __name__ == "__main__":
     # format_student_data_csv_to_json()
     # format_teacher_data_csv_to_json()
-    merge_student_and_teacher_data(
-        input_student_path=os.path.join("..", "data", "reactions.json"),
-        input_teacher_path=os.path.join("..", "data", "profs_phase1.json"),
-        output_path=os.path.join("..", "data", "students_teacher_gold.json")
-    )
+    merge_student_and_teacher_data()
