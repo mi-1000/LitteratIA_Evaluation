@@ -1,10 +1,11 @@
+from collections import defaultdict
 import json
 import numpy as np
 import pandas as pd
 import os
 
-SOURCE_FILE_PATH = os.path.join("..", "reactions.csv")
-OUTPUT_FILE_PATH = os.path.join("..", "data", "reactions.json")
+SOURCE_FILE_PATH = os.path.join("..", "profs_phase1.csv")
+OUTPUT_FILE_PATH = os.path.join("..", "data", "profs_phase1.json")
 
 LABELS_COLUMNS = [
     "complete",
@@ -15,7 +16,7 @@ LABELS_COLUMNS = [
     "understandable"
 ]
 
-SAVED_COLUMNS = [ # We're not keeping every column from the database dump; some data is redundant and some is irrelevant for our purposes
+SAVED_COLUMNS_STUDENTS = [ # We're not keeping every column from the database dump; some data is redundant and some is irrelevant for our purposes
     "id",
     "timestamp",
     "model_a_name",
@@ -38,12 +39,22 @@ SAVED_COLUMNS = [ # We're not keeping every column from the database dump; some 
     "interface_lang"
 ] + LABELS_COLUMNS
 
-def format_csv_to_json(file_path: str) -> None:
-    if not os.path.exists(file_path):
-        raise FileNotFoundError(f"File not found at: {file_path}")
+SAVED_COLUMNS_TEACHERS = [ # We're not keeping every column from the database dump; some data is redundant and some is irrelevant for our purposes
+    "id",
+    "timestamp",
+    "source_reaction_id",
+    "annotator_id",
+    "preferred_model",
+    "rating",
+    "comment"
+] + LABELS_COLUMNS
 
-    df = pd.read_csv(file_path)
-    df = df[SAVED_COLUMNS]
+def format_student_data_csv_to_json(input_path: str = SOURCE_FILE_PATH, output_path: str = OUTPUT_FILE_PATH, saved_columns: list[str] = SAVED_COLUMNS_STUDENTS) -> None:
+    if not os.path.exists(input_path):
+        raise FileNotFoundError(f"File not found at: {input_path}")
+
+    df = pd.read_csv(input_path)
+    df = df[saved_columns]
     
     # french_mask = df["question_content"].astype(str).apply(is_french)
     # french_mask = french_mask.fillna(False)
@@ -92,11 +103,62 @@ def format_csv_to_json(file_path: str) -> None:
         for label in LABELS_COLUMNS:
             del item[label] # Removing individual label columns after merging
 
-    with open(OUTPUT_FILE_PATH, "w", encoding="utf-8") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=4, ensure_ascii=False)
 
-    print("Data file successfully saved at ", OUTPUT_FILE_PATH)
+    print("Data file successfully saved at ", output_path)
 
+
+def format_teacher_data_csv_to_json(input_path: str = SOURCE_FILE_PATH, output_path: str = OUTPUT_FILE_PATH, saved_columns: list[str] = SAVED_COLUMNS_TEACHERS) -> None:
+    if not os.path.exists(input_path):
+        raise FileNotFoundError(f"File not found at: {input_path}")
+
+    df = pd.read_csv(input_path)
+    df = df[saved_columns]
+
+    df = df.replace({np.nan: None}) # Replace NaN values with None for JSON compatibility
+    
+    out = df.to_dict(orient="records")
+    
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(out, f, indent=4, ensure_ascii=False)
+
+    print("Data file successfully saved at ", output_path)
+
+def merge_student_and_teacher_data(input_student_path: str, input_teacher_path: str, output_path: str) -> None:
+    if not os.path.exists(input_student_path):
+        raise FileNotFoundError(f"File not found at: {input_student_path}")
+    if not os.path.exists(input_teacher_path):
+        raise FileNotFoundError(f"File not found at: {input_teacher_path}")
+
+    with open(input_student_path, "r", encoding="utf-8") as f:
+        student_data = json.load(f)
+
+    with open(input_teacher_path, "r", encoding="utf-8") as f:
+        teacher_data = json.load(f)
+
+    # Create a mapping from a student conversation id to all teacher annotations for that conversation
+    teacher_mapping = defaultdict(list)
+    for item in teacher_data:
+        teacher_mapping[item["source_reaction_id"]].append(item)
+        del item["source_reaction_id"]  # Remove the source_reaction_id from the teacher data to avoid redundancy
+
+    # Merge teacher data into student data based on reaction_id
+    for student_item in student_data:
+        reaction_id = student_item["reaction_id"]
+        student_item["teacher_annotation_data"] = teacher_mapping.get(reaction_id, [])  # Assign all corresponding teacher data
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        json.dump(student_data, f, indent=4, ensure_ascii=False)
+
+    print("Merged data file successfully saved at ", output_path)
+    
 
 if __name__ == "__main__":
-    format_csv_to_json(SOURCE_FILE_PATH)
+    # format_student_data_csv_to_json()
+    # format_teacher_data_csv_to_json()
+    merge_student_and_teacher_data(
+        input_student_path=os.path.join("..", "data", "reactions.json"),
+        input_teacher_path=os.path.join("..", "data", "profs_phase1.json"),
+        output_path=os.path.join("..", "data", "students_teacher_gold.json")
+    )

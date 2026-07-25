@@ -12,6 +12,8 @@
         - (iv) (**Optionnel**) champ textuel libre pour apporter d'éventuelles précisions qui vous semblent utiles
 
 - Progression enregistrée automatiquement, même entre les sessions (liée à un même appareil + même navigateur), via un identifiant anonyme généré par votre navigateur
+- Certains items demandent de juger la transcription d'une **conversation orale** ou une **production écrite** : **dans ce cas, ne pas lire la question, mais uniquement la réponse** (c'est trop long et n'apporte pas grand chose pour le jugement de la réponse)
+- Il n'est **pas nécessaire de répondre à toutes les conversations**, vous pouvez donc passer celles que vous ne souhaitez pas évaluer (mais plus il y en a, mieux c'est !) -- dans l'absolu, au moins **20 à 30 conversations** jugées serait idéal pour s'assurer d'avoir un jugement fiable
 
 ## Définition des étiquettes
 > On peut les retrouver en pointant le curseur sur une étiquette (sur ordi) / en cliquant sur le point d'interrogation (sur mobile)

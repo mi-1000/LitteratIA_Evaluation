@@ -6,7 +6,7 @@ import time
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from enum import Enum
-from typing import Any, Tuple
+from typing import Any, Callable, Tuple
 from openai import APIConnectionError, AuthenticationError, OpenAI, PermissionDeniedError, RateLimitError
 from dotenv import load_dotenv
 import pandas as pd
@@ -360,6 +360,102 @@ def write_record(record: dict[str, Any], output_path: str = OUTPUT_PATH) -> None
         with open(output_path, 'a+', encoding='utf-8') as out_f:
             out_f.write(json.dumps(record, ensure_ascii=False) + '\n')
 
+def _load_json_corpus(path: str, sample: int, seed: int) -> list:
+    """Load a JSON-array dataset and randomly sample `sample` items from it (or fewer, if the dataset is smaller)."""
+    with open(path, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+    return random.Random(seed).sample(data, min(sample, len(data)))
+
+def _load_jsonl_corpus(path: str, sample: int, seed: int) -> list:
+    """Load a JSONL dataset and randomly sample `sample` lines from it (or fewer, if the dataset is smaller)."""
+    with open(path, 'r', encoding='utf-8') as f:
+        lines = f.readlines()
+    lines = random.Random(seed).sample(lines, min(sample, len(lines)))
+    return [json.loads(line) for line in lines]
+
+def _extract_spoken_item(item: dict) -> Tuple[str, str, str, dict]:
+    # Extracts key and value since root objects are formatted as {"path/to/file.cha": [...]}
+    file_path = list(item.keys())[0]
+    dialogue_turns = item[file_path]
+    file_id = os.path.basename(file_path).replace('.cha', '')
+    user_prompt = format_dialogue_to_prompt(dialogue_turns)
+    return f"spoken_{file_id}", "f", user_prompt, {
+        "source_file": file_path, "source_dataset": DatasetType.SPOKEN.value
+    }
+
+def _extract_stackexchange_item(item: dict) -> Tuple[str, str, str, dict]:
+    question_id = int(item.get("id", "0"))
+    tags = item.get("tags", [])
+    user_prompt = format_question_to_prompt(item)
+    return f"fse_{question_id}", "c", user_prompt, {
+        "tags": tags, "source_dataset": DatasetType.STACKEXCHANGE.value
+    }
+
+def _extract_wif_item(item: dict) -> Tuple[str, str, str, dict]:
+    # Extracts key and value since root objects are formatted as {"path/to/file.txt": [...]}
+    file_path = list(item.keys())[0]
+    file_id = os.path.basename(file_path).replace('.txt', '')
+    contents = item[file_path]
+    grade: int = contents.get("grade", 0)
+    text: str = contents.get("content", "").strip()
+    user_prompt = format_written_production_to_prompt(text, grade)
+    return f"wif_{file_id}", "f", user_prompt, {
+        "source_file": file_path, "source_dataset": DatasetType.WIF.value
+    }
+
+def _run_prompt_generation_generic(
+    dataset_path: str,
+    load_fn: Callable[[str, int, int], list],
+    extract_fn: Callable[[Any], Tuple[str, str, str, dict]],
+    n: int | None,
+    start_item: int,
+    sample: int,
+    seed: int
+) -> None:
+    """
+    Generic runner shared by all datasets: loads the corpus, assigns balanced
+    model pairs, builds one task per (item, prompt configuration), runs them
+    concurrently, and writes each resulting record as it completes.
+
+    Args:
+        dataset_path (str): Path to the dataset file on disk.
+        load_fn (Callable): Function that loads and samples the raw corpus, given (path, sample, seed).
+        extract_fn (Callable): Function that turns one raw item into (item_id, category, user_prompt, extra_kwargs).
+        n (int | None): Number of items to process. If it exceeds the number of items in the dataset, it will be capped. If None, all sampled items will be processed.
+        start_item (int): Index of the first item to process in the original dataset.
+        sample (int): Number of items from the input dataset to randomly sample from.
+        seed (int): Seed for reproducibility.
+    """
+    if not os.path.exists(dataset_path):
+        raise FileNotFoundError(f"Dataset not found at: {dataset_path}")
+
+    print(f"Loading dataset: {dataset_path}")
+    corpus_data = load_fn(dataset_path, sample, seed)
+
+    items = corpus_data[start_item:start_item + (n if n is not None else len(corpus_data))]
+
+    # Not using 'n' here to avoid an IndexError, since `items` may be shorter
+    # than `n` (e.g. if start_item + n exceeds the sampled corpus size)
+    model_a_assignments, model_b_assignments = get_balanced_model_pairs(len(items), seed=seed)
+
+    tasks = []
+
+    for i, item in enumerate(items):
+        item_id, category, user_prompt, extra_kwargs = extract_fn(item)
+        model_a, model_b = model_a_assignments[i], model_b_assignments[i]
+
+        for config_name, prompt_type in PROMPT_CONFIGURATIONS.items():
+            tasks.append((item_id, category, config_name, prompt_type, user_prompt, (model_a, model_b), extra_kwargs))
+
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        futures = [executor.submit(process_single_response, *task[:-1], **task[-1]) for task in tasks]
+
+        for future in tqdm(as_completed(futures), total=len(futures), desc="Generating prompts"):
+            record = future.result()
+            write_record(record)
+
+    print("Generation completed.")
+
 def run_prompt_generation_spoken(n: int | None = None, start_item: int = 0, sample: int = 1000, seed: int = SEED) -> None:
     """
     Run prompt generation for the spoken dataset.
@@ -370,44 +466,9 @@ def run_prompt_generation_spoken(n: int | None = None, start_item: int = 0, samp
         sample (int): Number of items from the input dataset to randomly sample from.
         seed (int): Seed for reproducibility.
     """
-    if not os.path.exists(SPOKEN_DATASET_PATH):
-        raise FileNotFoundError(f"Dataset not found at: {SPOKEN_DATASET_PATH}")
-        
-    print(f"Loading dataset: {SPOKEN_DATASET_PATH}")
-    with open(SPOKEN_DATASET_PATH, 'r', encoding='utf-8') as f:
-        corpus_data = json.load(f)
-    
-    corpus_data = random.sample(corpus_data, min(sample, len(corpus_data)))
-    
-    items = corpus_data[start_item:start_item + (n if n is not None else len(corpus_data))]
-    
-    model_a_assignments, model_b_assignments = get_balanced_model_pairs(len(items), seed=seed) # Not using 'n' here to avoid an IndexError
-    
-    tasks = []
-    
-    for i, item in enumerate(items):
-        # Extracts key and value since root objects are formatted as {"path/to/file.cha": [...]}
-        file_path = list(item.keys())[0]
-        dialogue_turns = item[file_path]
-        file_id = os.path.basename(file_path).replace('.cha', '')
-        
-        user_prompt = format_dialogue_to_prompt(dialogue_turns)
-        
-        model_a, model_b = model_a_assignments[i], model_b_assignments[i]
-        
-        for config_name, prompt_type in PROMPT_CONFIGURATIONS.items():
-            tasks.append((f"spoken_{file_id}", "f", config_name, prompt_type, user_prompt, (model_a, model_b), {"source_file": file_path, "source_dataset": DatasetType.SPOKEN.value}))
+    _run_prompt_generation_generic(SPOKEN_DATASET_PATH, _load_json_corpus, _extract_spoken_item, n, start_item, sample, seed)
 
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [executor.submit(process_single_response, *task[:-1], **task[-1]) for task in tasks]
-        
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Generating prompts"):
-            record = future.result()
-            write_record(record)
-        
-    print("Generation completed.")
-
-def run_prompt_generation_stackexchange(n: int = 1, start_item: int = 0, sample: int = 1000, seed: int = SEED) -> None:
+def run_prompt_generation_stackexchange(n: int | None = None, start_item: int = 0, sample: int = 1000, seed: int = SEED) -> None:
     """
     Run prompt generation for the StackExchange dataset.
     
@@ -417,45 +478,7 @@ def run_prompt_generation_stackexchange(n: int = 1, start_item: int = 0, sample:
         sample (int): Number of items from the input dataset to randomly sample from.
         seed (int): Seed for reproducibility.
     """
-    if not os.path.exists(STACKEXCHANGE_DATASET_PATH):
-        raise FileNotFoundError(f"Dataset not found at: {STACKEXCHANGE_DATASET_PATH}")
-        
-    print(f"Loading dataset: {STACKEXCHANGE_DATASET_PATH}")
-    
-    with open(STACKEXCHANGE_DATASET_PATH, 'r', encoding='utf-8') as f:
-        corpus_data = []
-        lines = f.readlines()
-        lines = random.sample(lines, min(sample, len(lines)))
-        
-        for line in lines:
-            data = json.loads(line)
-            corpus_data.append(data)
-    
-    items = corpus_data[start_item:start_item + (n if n is not None else len(corpus_data))]
-    
-    model_a_assignments, model_b_assignments = get_balanced_model_pairs(len(items), seed=seed)
-    
-    tasks = []
-    
-    for i, item in enumerate(items):
-        question_id = int(item.get("id", "0"))
-        tags = item.get("tags", [])
-        
-        user_prompt = format_question_to_prompt(item)
-        
-        model_a, model_b = model_a_assignments[i], model_b_assignments[i]
-        
-        for config_name, prompt_type in PROMPT_CONFIGURATIONS.items():
-            tasks.append((f"fse_{question_id}", "c", config_name, prompt_type, user_prompt, (model_a, model_b), {"tags": tags, "source_dataset": DatasetType.STACKEXCHANGE.value}))
-    
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [executor.submit(process_single_response, *task[:-1], **task[-1]) for task in tasks]
-        
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Generating prompts"):
-            record = future.result()
-            write_record(record)
-
-    print("Generation completed.")
+    _run_prompt_generation_generic(STACKEXCHANGE_DATASET_PATH, _load_jsonl_corpus, _extract_stackexchange_item, n, start_item, sample, seed)
 
 def run_prompt_generation_wif(n: int | None = None, start_item: int = 0, sample: int = 1000, seed: int = SEED) -> None:
     """
@@ -467,46 +490,7 @@ def run_prompt_generation_wif(n: int | None = None, start_item: int = 0, sample:
         sample (int): Number of items from the input dataset to randomly sample from.
         seed (int): Seed for reproducibility.
     """
-    if not os.path.exists(WIF_DATASET_PATH):
-        raise FileNotFoundError(f"Dataset not found at: {WIF_DATASET_PATH}")
-    
-    print(f"Loading dataset: {WIF_DATASET_PATH}")
-    
-    with open(WIF_DATASET_PATH, 'r', encoding='utf-8') as f:
-        corpus_data = json.load(f)
-    
-    corpus_data = random.sample(corpus_data, min(sample, len(corpus_data)))
-
-    items = corpus_data[start_item:start_item + (n if n is not None else len(corpus_data))]
-
-    model_a_assignments, model_b_assignments = get_balanced_model_pairs(len(items), seed=seed)
-
-    tasks = []
-    
-    for i, item in enumerate(items):
-        # Extracts key and value since root objects are formatted as {"path/to/file.txt": [...]}
-        file_path = list(item.keys())[0]
-        file_id = os.path.basename(file_path).replace('.txt', '')
-        contents = item[file_path]
-        
-        grade: int = contents.get("grade", 0)
-        text: str = contents.get("content", "").strip()
-        
-        user_prompt = format_written_production_to_prompt(text, grade)
-        
-        model_a, model_b = model_a_assignments[i], model_b_assignments[i]
-        
-        for config_name, prompt_type in PROMPT_CONFIGURATIONS.items():
-            tasks.append((f"wif_{file_id}", "f", config_name, prompt_type, user_prompt, (model_a, model_b), {"source_file": file_path, "source_dataset": DatasetType.WIF.value}))
-            
-    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        futures = [executor.submit(process_single_response, *task[:-1], **task[-1]) for task in tasks]
-        
-        for future in tqdm(as_completed(futures), total=len(futures), desc="Generating prompts"):
-            record= future.result()
-            write_record(record)
-        
-    print("Generation completed.")
+    _run_prompt_generation_generic(WIF_DATASET_PATH, _load_json_corpus, _extract_wif_item, n, start_item, sample, seed)
 
 def run_prompt_generation(n: int | Tuple[int, int, int] | None = None, start_item: int | Tuple[int, int, int] = 0) -> None:
     """
