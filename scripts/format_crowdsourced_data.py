@@ -4,12 +4,14 @@ import numpy as np
 import pandas as pd
 import os
 
-SOURCE_FILE_PATH = os.path.join("..", "profs_phase1.csv")
-OUTPUT_FILE_PATH = os.path.join("..", "data", "profs_phase1.json")
+INPUT_STUDENT_FILE_PATH = os.path.join("..", "reactions.csv")
+INPUT_TEACHER_FILE_PATH = os.path.join("..", "profs_phase1.csv")
 
-INPUT_STUDENT_PATH = os.path.join("..", "data", "reactions.json"),
-INPUT_TEACHER_PATH = os.path.join("..", "data", "profs_phase1.json"),
+OUTPUT_STUDENT_PATH = os.path.join("..", "data", "reactions.json")
+OUTPUT_TEACHER_PATH = os.path.join("..", "data", "profs_phase1.json")
 OUTPUT_PATH = os.path.join("..", "data", "students_teacher_gold.json")
+
+ANNOTATORS_TO_EXCLUDE = ['63dd1e87-8d1b-4c43-a4d3-3fa017236b32'] # Myself, as I tested out the platform, but am not a target annotator
 
 LABELS_COLUMNS = [
     "complete",
@@ -53,7 +55,7 @@ SAVED_COLUMNS_TEACHERS = [ # We're not keeping every column from the database du
     "comment"
 ] + LABELS_COLUMNS
 
-def format_student_data_csv_to_json(input_path: str = SOURCE_FILE_PATH, output_path: str = OUTPUT_FILE_PATH, saved_columns: list[str] = SAVED_COLUMNS_STUDENTS) -> None:
+def format_student_data_csv_to_json(input_path: str = INPUT_STUDENT_FILE_PATH, output_path: str = OUTPUT_STUDENT_PATH, saved_columns: list[str] = SAVED_COLUMNS_STUDENTS) -> None:
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"File not found at: {input_path}")
 
@@ -113,12 +115,15 @@ def format_student_data_csv_to_json(input_path: str = SOURCE_FILE_PATH, output_p
     print("Data file successfully saved at ", output_path)
 
 
-def format_teacher_data_csv_to_json(input_path: str = SOURCE_FILE_PATH, output_path: str = OUTPUT_FILE_PATH, saved_columns: list[str] = SAVED_COLUMNS_TEACHERS) -> None:
+def format_teacher_data_csv_to_json(input_path: str = INPUT_TEACHER_FILE_PATH, output_path: str = OUTPUT_TEACHER_PATH, saved_columns: list[str] = SAVED_COLUMNS_TEACHERS, annotators_to_exclude: list[str] = ANNOTATORS_TO_EXCLUDE) -> None:
     if not os.path.exists(input_path):
         raise FileNotFoundError(f"File not found at: {input_path}")
 
     df = pd.read_csv(input_path)
     df = df[saved_columns]
+    
+    if annotators_to_exclude:  # Exclude specific annotators from the gold dataset if provided
+        df = df[~df["annotator_id"].isin(annotators_to_exclude)]
 
     df = df.replace({np.nan: None}) # Replace NaN values with None for JSON compatibility
     
@@ -129,7 +134,7 @@ def format_teacher_data_csv_to_json(input_path: str = SOURCE_FILE_PATH, output_p
 
     print("Data file successfully saved at ", output_path)
 
-def merge_student_and_teacher_data(input_student_path: str = INPUT_STUDENT_PATH, input_teacher_path: str = INPUT_TEACHER_PATH, output_path: str = OUTPUT_PATH) -> None:
+def merge_student_and_teacher_data(input_student_path: str = OUTPUT_STUDENT_PATH, input_teacher_path: str = OUTPUT_TEACHER_PATH, output_path: str = OUTPUT_PATH) -> None:
     if not os.path.exists(input_student_path):
         raise FileNotFoundError(f"File not found at: {input_student_path}")
     if not os.path.exists(input_teacher_path):
@@ -159,6 +164,6 @@ def merge_student_and_teacher_data(input_student_path: str = INPUT_STUDENT_PATH,
     
 
 if __name__ == "__main__":
-    # format_student_data_csv_to_json()
-    # format_teacher_data_csv_to_json()
+    format_student_data_csv_to_json()
+    format_teacher_data_csv_to_json()
     merge_student_and_teacher_data()
