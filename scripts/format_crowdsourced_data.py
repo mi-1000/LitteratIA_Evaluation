@@ -4,6 +4,8 @@ import numpy as np
 import pandas as pd
 import os
 
+from generate_synthetic_conversation_dataset import MODEL_LIST
+
 INPUT_STUDENT_FILE_PATH = os.path.join("..", "reactions.csv")
 INPUT_TEACHER_FILE_PATH = os.path.join("..", "profs_phase1.csv")
 
@@ -157,13 +159,24 @@ def merge_student_and_teacher_data(input_student_path: str = OUTPUT_STUDENT_PATH
         reaction_id = student_item["reaction_id"]
         student_item["teacher_annotation_data"] = teacher_mapping.get(reaction_id, [])  # Assign all corresponding teacher data
 
+    student_data = [
+        item for item in student_data
+        if item.get("model_a_name", "") in MODEL_LIST
+        and item.get("model_b_name", "") in MODEL_LIST
+    ] # Remove items with models not in the predefined model list (if some test conversations used other models not tested for evaluation)
+
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(student_data, f, indent=4, ensure_ascii=False)
-
+    
     print("Merged data file successfully saved at ", output_path)
     
-
-if __name__ == "__main__":
+def process_phase1():
     format_student_data_csv_to_json()
     format_teacher_data_csv_to_json()
     merge_student_and_teacher_data()
+
+def process_phase2(input_path=os.path.join("..", "profs_phase2.csv"), output_path=os.path.join("..", "data", "profs_phase2.json")):
+    format_teacher_data_csv_to_json(input_path=input_path, output_path=output_path)
+
+if __name__ == "__main__":
+    process_phase2()
