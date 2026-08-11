@@ -1,13 +1,17 @@
 import argparse
 import json
+import logging
 import os
 import random
+import sys
+import traceback
 
+from datetime import time
 from dotenv import load_dotenv
 from openai import OpenAI
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from tqdm import tqdm
-from typing import Literal, Any, Tuple, TypedDict
+from typing import Literal, Any
 
 SEED = 2026
 
@@ -20,7 +24,6 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT_PATH = os.path.dirname(SCRIPT_DIR)
 DEFAULT_INPUT_PATH = os.path.join(PROJECT_ROOT_PATH, "data", "reactions.json")
 DEFAULT_OUTPUT_PATH = os.path.join(PROJECT_ROOT_PATH, "data", "llm_as_a_judge_pairwise_preferences.jsonl")
-
 GOLD_DATASET_PATH = os.path.join(PROJECT_ROOT_PATH, "data", "students_teacher_gold.json")
 
 class JudgeOutput(BaseModel):
@@ -30,11 +33,16 @@ class JudgeOutput(BaseModel):
     )
     preferred_model: Literal["a", "b", "both_equal"] = Field(description="Preferred response slot")
     rating: int = Field(ge=1, le=5, description="Discrete rating from 1 to 5")
-
+    
+    @field_validator("labels")
+    @classmethod
+    def dedupe_labels(cls, v):
+        # Unlike set(), dict.fromkeys preserves the order of the original list
+        return list(dict.fromkeys(v))
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Clean LLM-as-a-Judge script.")
-    parser.add_argument("--input", default=DEFAULT_INPUT_PATH, help="Path to source reactions JSON.")
+    parser.add_argument("--input", default=DEFAULT_INPUT_PATH, help="Path to source JSON.")
     parser.add_argument("--output", default=DEFAULT_OUTPUT_PATH, help="Path to output JSONL.")
     parser.add_argument("--model", default=DEFAULT_MODEL, help="Judge model name.")
     parser.add_argument("--provider", default=DEFAULT_PROVIDER, choices=["ollama", "openrouter"], help="API provider.")
@@ -43,6 +51,15 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=SEED, help="Random seed for reproducibility.")
     return parser.parse_args()
 
+def setup_logging(run_name: str) -> logging.Logger:
+    logger = logging.getLogger(run_name)
+    logger.setLevel(logging.INFO)
+    handler = logging.StreamHandler(sys.stdout)
+    handler.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s", datefmt="%H:%M:%S"
+    ))
+    logger.addHandler(handler)
+    return logger
 
 def build_client(provider: str) -> OpenAI:
     if provider == "openrouter":
@@ -55,7 +72,6 @@ def build_client(provider: str) -> OpenAI:
         base_url=os.getenv("OLLAMA_BASE_URL", OLLAMA_DEFAULT_BASE_URL),
         api_key=os.getenv("OLLAMA_API_KEY", "ollama"),
     )
-
 
 def extract_assistant_message(conversation: Any) -> str:
     if not isinstance(conversation, list):
@@ -74,13 +90,10 @@ def format_conversation(conversation: list[dict[str, str]]) -> str:
     for message in conversation:
         role = message.get("role", "")
         content = message.get("content", "")
-        
-        # Format depending on the role
         if role == "user":
             formatted_lines.append(f"########\nLEARNER:\n########\n\n{content}\n\n########\n")
         elif role in ("assistant", "model"):
             formatted_lines.append(f"########\nTUTOR:\n########\n\n{content}\n\n########\n")
-            
     return "\n".join(formatted_lines)
 
 def format_example(example: dict[str, str]) -> str:
@@ -153,10 +166,6 @@ def select_few_shot_example(input_gold_dataset_path: str = GOLD_DATASET_PATH, ou
         preferred_models = [ann.get("preferred_model") for ann in items if ann.get("preferred_model") in ("a", "b", "both_equal")]
         # If all elements of the list are equal, and we have at least 2 annotations, we can consider it a consensus:
         if len(preferred_models) >= 2 and all(x == preferred_models[0] for x in preferred_models):
-            if most_annotators_agreeing:
-                # Keep series with the most annotators agreeing (i.e. the longest series of identical preferred_model values)
-                max_agreeing_count = max(preferred_models.count(x) for x in set(preferred_models))
-            
             is_match = False
             if outcome == "both_equal" and preferred_models[0] == "both_equal":
                 is_match = True
@@ -168,7 +177,6 @@ def select_few_shot_example(input_gold_dataset_path: str = GOLD_DATASET_PATH, ou
             
     if not contenders:
         raise ValueError(f"No examples found with consensus outcome '{outcome}' in the gold dataset.")
-    
     return rng.choice(contenders)
 
 JUDGE_SYSTEM_PROMPT = f"""You are an impartial judge for pairwise responses produced by a French-learning assistant.
@@ -201,13 +209,61 @@ def call_judge(client: OpenAI, model: str, question: str, response_a: str, respo
         temperature=0,
         seed=seed,
     )
-    
-    result: JudgeOutput = response.choices[0].message.parsed
-    return result.model_dump()
+    return response.choices[0].message.parsed.model_dump()
 
-def main() -> None:
+def call_judge_with_retry(client: OpenAI, model: str, question: str, response_a: str, response_b: str, seed: int, retries: int = 5, base_delay: int = 5) -> dict[str, Any] | None:
+    """
+    Include exponential backoff retry logic for rate-limited API calls.
+    """
+    for attempt in range(retries + 1):
+        try:
+            return call_judge(client, model, question, response_a, response_b, seed)
+        except Exception as e:
+            is_rate_limit = "429" in str(e) or "rate" in str(e).lower()
+            if attempt < retries and is_rate_limit:
+                delay = base_delay * (2 ** attempt)  # exponential backoff
+                print(f"Rate limited, retrying in {delay}s (attempt {attempt+1}/{retries})...")
+                time.sleep(delay)
+                continue
+            raise
+
+def extract_human_labels(item: dict) -> list[str]:
+    """Extract boolean labels set to True by the human annotator."""
+    label_list = ["complete", "correct", "relevant", "concise", "scaffolding", "understandable"]
+    
+    # If labels are directly in the item dictionary
+    if any(k in item for k in label_list):
+        return [label for label in label_list if item.get(label) is True]
+    
+    # If labels are in a nested dictionary "labels"
+    labels_dict = item.get("labels", {})
+    if isinstance(labels_dict, dict):
+        return [label for label in label_list if labels_dict.get(label) is True]
+        
+    return []
+
+def load_processed_keys(output_path: str) -> set[tuple]:
+    """Load (reaction_id, annotator_id, is_swapped) tuples already present in output."""
+    done = set()
+    if not os.path.exists(output_path):
+        return done
+    with open(output_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+                done.add((rec.get("reaction_id"), rec.get("annotator_id"), rec.get("is_swapped")))
+            except json.JSONDecodeError:
+                continue  # line truncated by a previous interrupted run
+    return done
+
+def main() -> None:    
     args = parse_args()
     load_dotenv()
+    logger = setup_logging(f"{os.path.basename(args.input)}__{args.model}")
+    
     client = build_client(args.provider)
 
     if not os.path.exists(args.input):
@@ -216,7 +272,6 @@ def main() -> None:
     with open(args.input, "r", encoding="utf-8") as f:
         items = json.load(f)
 
-    # Process items based on dataset type
     processed_items = []
     label_list = ["complete", "correct", "relevant", "concise", "scaffolding", "understandable"]
 
@@ -271,27 +326,42 @@ def main() -> None:
             item["human_rationale"] = item.get("comment")
             processed_items.append(item)
 
+    if args.force and os.path.exists(args.output):
+        os.remove(args.output)
+    os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
+    
+    already_done = load_processed_keys(args.output)
+    if already_done:
+        print(f"Resuming from {args.output}. Already processed {len(already_done)} items.")
+    
     rng = random.Random(args.seed)
     rng.shuffle(processed_items)
+    def has_pending_work(item):
+        key_a = (item.get("reaction_id"), item.get("annotator_id"), False)
+        key_b = (item.get("reaction_id"), item.get("annotator_id"), True)
+        return key_a not in already_done or key_b not in already_done
+    processed_items = [item for item in processed_items if has_pending_work(item)]
     
     if args.limit:
         processed_items = processed_items[:args.limit]
 
-    if args.force and os.path.exists(args.output):
-        os.remove(args.output)
-
-    os.makedirs(os.path.dirname(args.output) or ".", exist_ok=True)
-
     with open(args.output, "a", encoding="utf-8") as out_file:
+        skipped = 0
         for item in tqdm(processed_items, desc="Evaluating pairs"):
             resp_a = extract_assistant_message(item.get("conversation_a"))
             resp_b = extract_assistant_message(item.get("conversation_b"))
             question = item.get("question_content") or item.get("opening_msg", "")
 
             if not resp_a or not resp_b or not question:
+                skipped += 1
+                logger.warning(f"Skipping item {item.get('reaction_id')} due to missing content: {item.get('conversation_a')}, {item.get('conversation_b')}, {item.get('question_content')}")
                 continue
 
             for is_swapped in (False, True):
+                key = (item.get("reaction_id"), item.get("annotator_id"), is_swapped)
+                if key in already_done:
+                    continue  # Skip already processed items
+                
                 current_a = resp_b if is_swapped else resp_a
                 current_b = resp_a if is_swapped else resp_b
                 name_a = item.get("model_b_name") if is_swapped else item.get("model_a_name")
@@ -300,7 +370,8 @@ def main() -> None:
                 try:
                     evaluation = call_judge(client, args.model, question, current_a, current_b, args.seed)
                 except Exception as e:
-                    print(f"Error evaluating item {item.get('reaction_id')}: {e}")
+                    logger.error(f"Error evaluating item {item.get('reaction_id')}: {e}")
+                    logger.debug(traceback.format_exc())
                     continue
 
                 pref = evaluation["preferred_model"]
@@ -335,8 +406,10 @@ def main() -> None:
 
                 out_file.write(json.dumps(record, ensure_ascii=False) + "\n")
                 out_file.flush()
+                os.fsync(out_file.fileno()) # Ensure data is written to disk immediately
+                already_done.add(key)
 
-    print(f"Evaluation complete. Saved to {args.output}")
-    
+    logger.info(f"Evaluation complete. Skipped {skipped} items. Saved to {args.output}")
+
 if __name__ == "__main__":
     main()
