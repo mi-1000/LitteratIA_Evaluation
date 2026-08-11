@@ -222,6 +222,8 @@ __marimo__/
 # Custom
 data/*
 !data/*.json
+!data/llm_as_a_judge_pairwise_preferences.jsonl
+data/reactions_old.json 
 data/spoken_dataset.json
 data/students_teacher_gold_old.json
 data/synthetic_conversations.json
