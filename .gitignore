@@ -232,3 +232,4 @@ data/wif_goteborg_dataset.json
 scripts/.env
 scripts/__pycache__/
 *.log
+*.pid
