@@ -224,6 +224,7 @@ data/*
 !data/*.json
 !data/judge_runs/
 !data/llm_as_a_judge_pairwise_preferences.jsonl
+!data/synthetic_conversations.json
 data/reactions_old.json 
 data/spoken_dataset.json
 data/students_teacher_gold_old.json
@@ -232,6 +233,7 @@ data/wif_goteborg_dataset.json
 *.csv
 scripts/.env
 scripts/__pycache__/
+scripts/synthetic_outputs_full.jsonl
 logs/
 *.log
 *.pid

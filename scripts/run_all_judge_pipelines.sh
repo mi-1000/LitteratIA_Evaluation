@@ -5,7 +5,7 @@ mkdir -p ../logs ../data/judge_runs ../pids
 
 echo "Launching all runs in parallel..."
 
-# 1) reactions.json x phi4 (ollama)
+# 1) learner data x phi4 (ollama)
 nohup python generate_llm_as_a_judge_pairwise_preferences.py \
   --input ../data/reactions.json \
   --output ../data/judge_runs/reactions__phi4.jsonl \
@@ -15,7 +15,7 @@ nohup python generate_llm_as_a_judge_pairwise_preferences.py \
 echo $! > ../pids/reactions__phi4.pid
 echo "  -> reactions.json / phi4 (PID $(cat ../pids/reactions__phi4.pid))"
 
-# 2) reactions.json x qwen3-235b (openrouter)
+# 2) learner data x qwen3-235b (openrouter)
 nohup python generate_llm_as_a_judge_pairwise_preferences.py \
   --input ../data/reactions.json \
   --output ../data/judge_runs/reactions__qwen3-235b.jsonl \
@@ -25,7 +25,7 @@ nohup python generate_llm_as_a_judge_pairwise_preferences.py \
 echo $! > ../pids/reactions__qwen3-235b.pid
 echo "  -> reactions.json / qwen3-235b (PID $(cat ../pids/reactions__qwen3-235b.pid))"
 
-# 3) profs_phase2.json x phi4 (ollama)
+# 3) teacher data x phi4 (ollama)
 nohup python generate_llm_as_a_judge_pairwise_preferences.py \
   --input ../data/profs_phase2.json \
   --output ../data/judge_runs/profs_phase2__phi4.jsonl \
@@ -35,7 +35,7 @@ nohup python generate_llm_as_a_judge_pairwise_preferences.py \
 echo $! > ../pids/profs_phase2__phi4.pid
 echo "  -> profs_phase2.json / phi4 (PID $(cat ../pids/profs_phase2__phi4.pid))"
 
-# 4) profs_phase2.json x qwen3-235b (openrouter)
+# 4) teacher data x qwen3-235b (openrouter)
 nohup python generate_llm_as_a_judge_pairwise_preferences.py \
   --input ../data/profs_phase2.json \
   --output ../data/judge_runs/profs_phase2__qwen3-235b.jsonl \

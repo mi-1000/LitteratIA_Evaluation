@@ -563,5 +563,5 @@ def check_marginals_and_cooccurrence(computed_pairs: tuple[list[str], list[str]]
     print(f"Standard deviation of pair counts: {(sum((c - sum(cooccurrence.values())/len(cooccurrence))**2 for c in cooccurrence.values()) / len(cooccurrence)) ** 0.5:.2f}")
 
 if __name__ == "__main__":
-    # run_prompt_generation()
+    run_prompt_generation()
     check_balanced_dataset()
