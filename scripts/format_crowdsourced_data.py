@@ -179,4 +179,4 @@ def process_phase2(input_path=os.path.join("..", "profs_phase2.csv"), output_pat
     format_teacher_data_csv_to_json(input_path=input_path, output_path=output_path)
 
 if __name__ == "__main__":
-    process_phase2()
+    process_phase1()

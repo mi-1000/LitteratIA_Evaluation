@@ -259,7 +259,7 @@ def load_processed_keys(output_path: str) -> set[tuple]:
                 continue  # line truncated by a previous interrupted run
     return done
 
-def main() -> None:    
+def main() -> None:
     args = parse_args()
     load_dotenv()
     logger = setup_logging(f"{os.path.basename(args.input)}__{args.model}")

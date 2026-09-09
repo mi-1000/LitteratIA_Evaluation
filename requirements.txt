@@ -1,0 +1,10 @@
+beautifulsoup4==4.15
+lingua-language-detector==4.16
+numpy==2.5.3
+openai==3.10.0
+pandas==3.0.5
+pydantic==2.13.5
+pylangacq==0.23.0
+python-dotenv==1.2.3
+regex==2026.6.28
+tqdm==4.68

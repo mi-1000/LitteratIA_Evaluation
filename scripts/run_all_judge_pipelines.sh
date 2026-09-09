@@ -1,54 +1,66 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-mkdir -p ../logs ../data/judge_runs ../pids
+# Folders to store logs, runs, and pids
+DIR_LOGS="../logs"
+DIR_RUNS="../data/judge_runs"
+DIR_PIDS="../pids"
+
+mkdir -p "$DIR_LOGS" "$DIR_RUNS" "$DIR_PIDS"
+
+# Datasets
+LEARNER_DATASET="reactions"
+TEACHER_DATASET="profs_phase2"
+
+# Input files
+INPUT_LEARNERS="../data/{$LEARNER_DATASET}.json"
+INPUT_TEACHERS="../data/{$TEACHER_DATASET}.json"
 
 echo "Launching all runs in parallel..."
 
-# 1) learner data x phi4 (ollama)
-nohup python generate_llm_as_a_judge_pairwise_preferences.py \
-  --input ../data/reactions.json \
-  --output ../data/judge_runs/reactions__phi4.jsonl \
-  --provider ollama \
-  --model phi4 \
-  >> ../logs/reactions__phi4.log 2>&1 &
-echo $! > ../pids/reactions__phi4.pid
-echo "  -> reactions.json / phi4 (PID $(cat ../pids/reactions__phi4.pid))"
+# Function to launch a job in the background
 
-# 2) learner data x qwen3-235b (openrouter)
-nohup python generate_llm_as_a_judge_pairwise_preferences.py \
-  --input ../data/reactions.json \
-  --output ../data/judge_runs/reactions__qwen3-235b.jsonl \
-  --provider openrouter \
-  --model qwen/qwen3-235b-a22b-2507 \
-  >> ../logs/reactions__qwen3-235b.log 2>&1 &
-echo $! > ../pids/reactions__qwen3-235b.pid
-echo "  -> reactions.json / qwen3-235b (PID $(cat ../pids/reactions__qwen3-235b.pid))"
+launch_job() {
+    local input_path=$1
+    local dataset_name=$2
+    local provider=$3
+    local model_exact=$4
+    local model_alias=$5
 
-# 3) teacher data x phi4 (ollama)
-nohup python generate_llm_as_a_judge_pairwise_preferences.py \
-  --input ../data/profs_phase2.json \
-  --output ../data/judge_runs/profs_phase2__phi4.jsonl \
-  --provider ollama \
-  --model phi4 \
-  >> ../logs/profs_phase2__phi4.log 2>&1 &
-echo $! > ../pids/profs_phase2__phi4.pid
-echo "  -> profs_phase2.json / phi4 (PID $(cat ../pids/profs_phase2__phi4.pid))"
+    local output_path="${DIR_RUNS}/${dataset_name}__${model_alias}.jsonl"
+    local log_path="${DIR_LOGS}/${dataset_name}__${model_alias}.log"
+    local pid_path="${DIR_PIDS}/${dataset_name}__${model_alias}.pid"
 
-# 4) teacher data x qwen3-235b (openrouter)
-nohup python generate_llm_as_a_judge_pairwise_preferences.py \
-  --input ../data/profs_phase2.json \
-  --output ../data/judge_runs/profs_phase2__qwen3-235b.jsonl \
-  --provider openrouter \
-  --model qwen/qwen3-235b-a22b-2507 \
-  >> ../logs/profs_phase2__qwen3-235b.log 2>&1 &
-echo $! > ../pids/profs_phase2__qwen3-235b.pid
-echo "  -> profs_phase2.json / qwen3-235b (PID $(cat ../pids/profs_phase2__qwen3-235b.pid))"
+    nohup python generate_llm_as_a_judge_pairwise_preferences.py \
+      --input "$input_path" \
+      --output "$output_path" \
+      --provider "$provider" \
+      --model "$model_exact" \
+      >> "$log_path" 2>&1 &
+    
+    echo $! > "$pid_path"
+    echo "  -> $(basename "$input_path") / $model_alias (PID $(cat "$pid_path"))"
+}
 
+# Launch jobs
+
+# learner data x phi4
+launch_job "$INPUT_LEARNERS" "$LEARNER_DATASET" "ollama" "phi4" "phi4"
+
+# learner data x qwen3-235b
+launch_job "$INPUT_LEARNERS" "$LEARNER_DATASET" "openrouter" "qwen/qwen3-235b-a22b-2507" "qwen3-235b"
+
+# teacher data x phi4
+launch_job "$INPUT_TEACHERS" "$TEACHER_DATASET" "ollama" "phi4" "phi4"
+
+# teacher data x qwen3-235b
+launch_job "$INPUT_TEACHERS" "$TEACHER_DATASET" "openrouter" "qwen/qwen3-235b-a22b-2507" "qwen3-235b"
+
+# Track progress
 echo ""
 echo "Track progress:"
-echo "  tail -f ../logs/*.log"
-echo "  watch -n5 'wc -l ../data/judge_runs/*.jsonl'"
+echo "  tail -f ${DIR_LOGS}/*.log"
+echo "  watch -n5 'wc -l ${DIR_RUNS}/*.jsonl'"
 echo ""
 echo "To wait for runs to finish before launching a new script:"
 echo "  wait"
