@@ -230,6 +230,7 @@ data/students_teacher_gold_old.json
 scripts/.env
 scripts/__pycache__/
 scripts/synthetic_outputs_full.jsonl
+guide_annotation.md
 logs/
 *.log
 *.pid
