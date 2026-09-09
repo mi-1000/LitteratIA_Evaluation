@@ -224,6 +224,7 @@ data/*
 !data/*.json
 !data/*.jsonl
 !data/judge_runs/
+!data/LICENSE
 data/reactions_old.json
 data/students_teacher_gold_old.json
 *.csv
