@@ -85,6 +85,6 @@ We thank the following people and organisations for providing the data used in t
 
 # Conditions of use
 
-Data including content from the French Stack Exchange is licensed under CC-BY-SA 4.0 and redistributed under the same license.
+Data including content from the French Stack Exchange is licensed under [CC-BY-SA 4.0](data/LICENSE) and redistributed under the same license.
 
-Everything else, including the scripts, collected data, and other materials in this repository, is licensed under CC-BY-NC-SA 4.0. You are free to use, modify and redistribute the scripts provided in this repository for research purposes, or use and modify them for personal use, provided you cite this repository and the original sources of the data.
+Everything else, including the scripts, collected data, and other materials in this repository, is licensed under [CC-BY-NC-SA 4.0](scripts/LICENSE). You are free to use, modify and redistribute the scripts provided in this repository for research purposes, or use and modify them for personal use, provided you cite this repository and the original sources of the data.
